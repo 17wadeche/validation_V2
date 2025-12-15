@@ -2653,38 +2653,45 @@ TEMPLATE = """
 </body>
 </html>
 """
-_instance_lock = None
-import tempfile
+import atexit
+import ctypes
+import ctypes.wintypes
+import json
+import os
 from pathlib import Path
+_instance_lock = None
+def _open_existing_if_running(app_dir: Path) -> None:
+    rt = app_dir / "runtime.json"
+    if rt.exists():
+        try:
+            d = json.loads(rt.read_text(encoding="utf-8"))
+            import webbrowser
+            host = d.get("host", "127.0.0.1")
+            port = int(d.get("port", 8000))
+            webbrowser.open(f"http://{host}:{port}")
+        except Exception:
+            pass
 def acquire_single_instance_lock(app_dir: Path) -> object:
-    lock_path = app_dir / "ui.lock"
-    try:
-        f = open(lock_path, "a+b")
-    except PermissionError:
-        lock_path = Path(tempfile.gettempdir()) / f"{APP_DIR_NAME}.ui.lock"
-        f = open(lock_path, "a+b")
-    f.seek(0)
-    if f.tell() == 0:
-        f.write(b"\0")
-        f.flush()
-    try:
-        if os.name == "nt":
-            import msvcrt
-            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            import fcntl
-            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        rt = app_dir / "runtime.json"
-        if rt.exists():
-            try:
-                d = json.loads(rt.read_text(encoding="utf-8"))
-                import webbrowser
-                webbrowser.open(f"http://{d.get('host','127.0.0.1')}:{int(d.get('port',8000))}")
-            except Exception:
-                pass
+    app_dir.mkdir(parents=True, exist_ok=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    CreateMutexW = kernel32.CreateMutexW
+    CreateMutexW.argtypes = [ctypes.wintypes.LPVOID, ctypes.wintypes.BOOL, ctypes.wintypes.LPCWSTR]
+    CreateMutexW.restype = ctypes.wintypes.HANDLE
+    CloseHandle = kernel32.CloseHandle
+    CloseHandle.argtypes = [ctypes.wintypes.HANDLE]
+    CloseHandle.restype = ctypes.wintypes.BOOL
+    ERROR_ALREADY_EXISTS = 183
+    mutex_name = f"Local\\{APP_DIR_NAME}_ValidationUI"
+    handle = CreateMutexW(None, False, mutex_name)
+    if not handle:
+        raise ctypes.WinError(ctypes.get_last_error())
+    already_running = ctypes.get_last_error() == ERROR_ALREADY_EXISTS
+    if already_running:
+        _open_existing_if_running(app_dir)
+        CloseHandle(handle)
         raise SystemExit(0)
-    return f
+    atexit.register(lambda: CloseHandle(handle))
+    return handle
 if __name__ == "__main__":
     _instance_lock = acquire_single_instance_lock(_get_app_dir())
     import os
