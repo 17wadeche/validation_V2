@@ -6,6 +6,9 @@ from typing import List, Optional, Tuple
 from io import BytesIO
 from datetime import datetime
 import sys
+import os, atexit
+from pathlib import Path
+from urllib.parse import urlparse
 import subprocess
 from docx import Document
 import re
@@ -43,6 +46,33 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 app = Flask(__name__)
+APP_DIR_NAME = "MedtronicValidationTool"  # MUST match launcher
+_runtime_file: Path | None = None
+_shutdown_token: str | None = None
+def _get_app_dir() -> Path:
+    base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or str(Path.home())
+    p = Path(base) / APP_DIR_NAME
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+def _write_runtime_file(host: str, port: int, token: str) -> None:
+    global _runtime_file
+    app_dir = _get_app_dir()
+    _runtime_file = app_dir / "runtime.json"
+    payload = {
+        "pid": os.getpid(),
+        "host": host,
+        "port": port,
+        "version": APP_VERSION,
+        "token": token,
+    }
+    _runtime_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+def _cleanup_runtime_file() -> None:
+    global _runtime_file
+    try:
+        if _runtime_file and _runtime_file.exists():
+            _runtime_file.unlink()
+    except Exception:
+        pass
 @contextmanager
 def _timed(timings: dict, name: str):
     start = time.perf_counter()
@@ -518,6 +548,20 @@ def _build_docx_bytes_for_view(
     bio = BytesIO()
     doc.save(bio)
     return bio.getvalue()
+from flask import abort, jsonify
+@app.route("/ping", methods=["GET"])
+def ping():
+    return jsonify({"ok": True, "version": APP_VERSION})
+@app.route("/shutdown", methods=["POST"])
+def shutdown():
+    token = request.headers.get("X-Validation-Token") or request.args.get("token") or ""
+    if not _shutdown_token or token != _shutdown_token:
+        abort(403)
+    func = request.environ.get("werkzeug.server.shutdown")
+    if func is None:
+        os._exit(0)
+    func()
+    return "OK"
 @app.route("/export_docx", methods=["POST"])
 def export_docx():
     view = (request.form.get("view") or "friendly").strip().lower()
@@ -2670,6 +2714,8 @@ if __name__ == "__main__":
     import threading
     import time
     import webbrowser
+    import uuid
+    _shutdown_token = uuid.uuid4().hex
     def _find_open_port(host: str, preferred: int) -> int:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -2685,6 +2731,8 @@ if __name__ == "__main__":
     host = os.getenv("VALIDATION_UI_HOST", "127.0.0.1")
     requested_port = int(os.getenv("VALIDATION_UI_PORT", "8000"))
     port = _find_open_port(host, requested_port)
+    _write_runtime_file(host, port, _shutdown_token)
+    atexit.register(_cleanup_runtime_file)
     def _open_browser() -> None:
         time.sleep(1)
         try:
