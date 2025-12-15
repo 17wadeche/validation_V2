@@ -60,6 +60,7 @@ def build_planning_prompt(
     template: str,
     examples: Iterable[Example],
     code_context: str,
+    user_instructions: str | None = None,
     release_type: str = "initial",
 ) -> str:
     release_label = "initial release" if release_type == "initial" else "update / change request"
@@ -81,6 +82,14 @@ def build_planning_prompt(
             "- Use the code context sections labeled 'Current code/context', "
             "'Previous version (for updates)', and 'Updated version (for updates)' to understand deltas.\n"
             "- Plan to keep unchanged sections aligned with prior QA docs and focus questions on new or changed behavior."
+        )
+    if user_instructions and user_instructions.strip():
+        prompt_sections.append(
+            "\n## Additional user instructions\n"
+            "Apply these instructions as constraints for drafting/mapping.\n"
+            "If an instruction conflicts with the template text or the code context, DO NOT guess—"
+            "add a clarifying question instead.\n"
+            + user_instructions.strip()
         )
     prompt_sections.append("\n## Template\n" + template.strip())
     placeholders = extract_placeholders(template)
@@ -114,6 +123,7 @@ def build_prompt(
     template: str,
     examples: Iterable[Example],
     code_context: str,
+    user_instructions: str | None = None,
     plan_context: str | None = None,
     release_type: str = "initial",
 ) -> str:
@@ -134,6 +144,14 @@ def build_prompt(
             else "\nTreat this as a first release; do not assume prior versions."
         )
     )
+    if user_instructions and user_instructions.strip():
+        prompt_sections.append(
+            "\n## Additional user instructions\n"
+            "Apply these instructions as constraints for drafting/mapping.\n"
+            "If an instruction conflicts with the template text or the code context, DO NOT guess—"
+            "add a clarifying question instead.\n"
+            + user_instructions.strip()
+        )
     prompt_sections.append("\n## Template\n" + template.strip())
     placeholders = extract_placeholders(template)
     if placeholders:
@@ -270,6 +288,7 @@ def build_design_update_prompt(
     examples: Iterable[Example],
     code_context: str,
     prior_json: str,
+    user_instructions: str | None = None,
     plan_context: str | None = None,
     release_type: str = "initial",
 ) -> str:
@@ -311,6 +330,14 @@ def build_design_update_prompt(
         "If this is an update, you may refine the design description to mention relevant changes, "
         "but only when they are clearly implied by the context."
     )
+    if user_instructions and user_instructions.strip():
+        sections.append(
+            "\n## Additional user instructions\n"
+            "Apply these instructions as constraints for drafting/mapping.\n"
+            "If an instruction conflicts with the template text or the code context, DO NOT guess—"
+            "add a clarifying question instead.\n"
+            + user_instructions.strip()
+        )
     sections.append("\n## Template\n" + template.strip())
     formatted_examples = format_examples(examples)
     if formatted_examples:
@@ -361,6 +388,7 @@ def build_update_prompt(
     examples: Iterable[Example],
     code_context: str,
     prior_json: str,
+    user_instructions: str | None = None,
     answered: list[tuple[str, str]] | None = None,
     plan_context: str | None = None,
     release_type: str = "initial",
@@ -386,6 +414,14 @@ def build_update_prompt(
             else "\nTreat this as a first release; do not fabricate prior-version differences."
         )
     )
+    if user_instructions and user_instructions.strip():
+        prompt_sections.append(
+            "\n## Additional user instructions\n"
+            "Apply these instructions as constraints for drafting/mapping.\n"
+            "If an instruction conflicts with the template text or the code context, DO NOT guess—"
+            "add a clarifying question instead.\n"
+            + user_instructions.strip()
+        )
     prompt_sections.append("\n## Template\n" + template.strip())
     placeholders = extract_placeholders(template)
     if placeholders:

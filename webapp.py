@@ -355,6 +355,7 @@ def _build_prompt_from_request(
     files,
     selected_template: Optional[StoredFile],
     kept_saved_examples: List[StoredFile],
+    user_instructions: str | None,
     plan_context: str | None,
     release_type: str,
 ) -> Tuple[str, Optional[bytes], Optional[StoredFile], List[StoredFile], str, List[Example], str]:
@@ -381,6 +382,7 @@ def _build_prompt_from_request(
         code_context,
         plan_context=plan_context,
         release_type=release_type,
+        user_instructions=user_instructions,
     )
     return (
         prompt,
@@ -556,6 +558,7 @@ def index():
     code_context_old_text: str = ""
     code_context_new_text: str = ""
     template_text: str = ""
+    user_instructions = request.form.get("user_instructions", "") or ""
     missing_placeholders: List[str] = []
     coverage_note: Optional[str] = None
     stored_inputs: SavedInputs = load_saved_inputs()
@@ -644,6 +647,7 @@ def index():
                 history=history,
                 stored=stored,
                 saved_inputs=persisted_inputs,
+                user_instructions=user_instructions,
                 plan_text=plan_text,
                 draft_questions=draft_questions,
                 app_version=APP_VERSION,
@@ -676,6 +680,7 @@ def index():
                 history=history,
                 stored=stored,
                 saved_inputs=persisted_inputs,
+                user_instructions=user_instructions,
                 plan_text=plan_text,
                 draft_questions=draft_questions,
                 draft_json=draft_json_from_form,
@@ -713,6 +718,7 @@ def index():
                 history=history,
                 stored=stored,
                 saved_inputs=persisted_inputs,
+                user_instructions=user_instructions,
                 plan_text=plan_text,
                 draft_questions=draft_questions,
                 draft_json=draft_json_from_form,
@@ -764,6 +770,7 @@ def index():
               history=history,
               stored=stored,
               saved_inputs=persisted_inputs,
+              user_instructions=user_instructions,
               plan_text=plan_text,
               draft_questions=draft_questions,
               code_context=code_context_text,
@@ -794,6 +801,7 @@ def index():
                 kept_saved_examples,
                 plan_text,
                 release_type,
+                user_instructions,
             )
         if stored_template:
             selected_template_name = stored_template.name
@@ -879,6 +887,7 @@ def index():
                                 plan_context=plan_text,
                                 release_type=release_type,
                                 missing_tokens=missing_for_update,
+                                user_instructions=user_instructions,
                             )
                             try:
                                 with _timed(timings, "coverage_fill_completion_ms"):
@@ -918,6 +927,10 @@ def index():
                         ),
                     }
                 full_history = [seed]
+                if user_instructions.strip():
+                  full_history.append(
+                      {"role": "system", "content": "Additional user instructions:\n" + user_instructions.strip()}
+                  )
                 if prompt and not chat_update_json:
                   full_history.append({"role": "system", "content": f"Reference prompt context to stay on-topic:\n{prompt}"})
                 if plan_text.strip():
@@ -961,7 +974,8 @@ def index():
         elif action == "build" and client:
             if not plan_text.strip():
                 planning_prompt = build_planning_prompt(
-                    template_text or "", examples, code_context, release_type=release_type
+                    template_text or "", examples, code_context, release_type=release_type,
+                    user_instructions=user_instructions,
                 )
                 try:
                     with _timed(timings, "planning_completion_ms"):
@@ -991,6 +1005,7 @@ def index():
                         prior_json=draft,
                         plan_context=plan_text,
                         release_type=release_type,
+                        user_instructions=user_instructions,
                     )
                     with _timed(timings, "design_refine_completion_ms"):
                         refined = client.generate_completion(design_update_prompt, model=model)
@@ -1051,6 +1066,7 @@ def index():
                     plan_context=plan_text,
                     release_type=release_type,
                     missing_tokens=missing_placeholders,
+                    user_instructions=user_instructions,
                 )
                 try:
                   with _timed(timings, "refine_completion_ms"):
@@ -1123,6 +1139,7 @@ def index():
         history=history,
         stored=stored,
         saved_inputs=persisted_inputs,
+        user_instructions=user_instructions,
         plan_text=plan_text,
         draft_questions=draft_questions,
         code_context=code_context_text,
@@ -1323,6 +1340,22 @@ TEMPLATE = """
                 </div>
               </div>
             {% endif %}
+            <div style="margin-top:10px;">
+              <label class="muted" style="font-weight:600;">Template-specific instructions (optional)</label>
+              <textarea
+                name="user_instructions"
+                placeholder="Examples:
+            - Ignore sections/tables: ...
+            - Do not fill names/signatures; leave blank.
+            - Use project codename 'X' everywhere.
+            - Treat any bracketed text as instructions to delete, not fill.
+            - Ignore example purpose statements in blue; replace with our own."
+                style="min-height: 90px;"
+              >{{ user_instructions or '' }}</textarea>
+              <p class="muted" style="margin:6px 0 0; font-size:12px;">
+                These instructions are applied before initial/update logic and should be treated as constraints unless they conflict with the template.
+              </p>
+            </div>
             <div style="display:grid; gap:10px;">
               <label class="checkbox">
                 <input type="radio" name="release_type" value="initial" {% if release_type != 'update' %}checked{% endif %}>
@@ -1539,6 +1572,7 @@ TEMPLATE = """
           <form method="post" id="answersForm">
             <textarea name="draft_json" style="display:none;">{{ draft }}</textarea>
             <input type="hidden" name="user_name" id="userNameHiddenChat" value="">
+            <textarea name="user_instructions" style="display:none;">{{ user_instructions or '' }}</textarea>
             <input type="hidden" name="plan_text" value="{{ plan_text }}">
             <textarea name="code_context" style="display:none;">{{ code_context }}</textarea>
             <textarea name="code_context_old" style="display:none;">{{ code_context_old }}</textarea>
@@ -1655,6 +1689,7 @@ TEMPLATE = """
       <div class="card" style="margin-top: 10px;">
         <div class="tagline"><span class="pill">Clarify or refine</span></div>
         <form method="post" class="chat" id="chatForm">
+          <textarea name="user_instructions" style="display:none;">{{ user_instructions or '' }}</textarea>
           <label class="checkbox" style="margin-top: 10px;">
             <input type="checkbox" name="chat_update_json" id="chat_update_json">
             <span>Integrate chat output to draft JSON (structured)</span>
