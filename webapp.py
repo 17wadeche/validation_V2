@@ -2654,9 +2654,15 @@ TEMPLATE = """
 </html>
 """
 _instance_lock = None
+import tempfile
+from pathlib import Path
 def acquire_single_instance_lock(app_dir: Path) -> object:
     lock_path = app_dir / "ui.lock"
-    f = open(lock_path, "a+b")
+    try:
+        f = open(lock_path, "a+b")
+    except PermissionError:
+        lock_path = Path(tempfile.gettempdir()) / f"{APP_DIR_NAME}.ui.lock"
+        f = open(lock_path, "a+b")
     f.seek(0)
     if f.tell() == 0:
         f.write(b"\0")
