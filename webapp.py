@@ -8,6 +8,8 @@ from datetime import datetime
 import sys
 import subprocess
 from docx import Document
+import re
+from typing import Any
 from docx.shared import Pt
 from flask import Flask, render_template_string, request, send_file
 from src.validation_agent import __version__ as APP_VERSION
@@ -293,6 +295,24 @@ def _apply_functional_requirements_enrichment(
     parsed["placeholders"] = placeholders_map
     updated = json.dumps(parsed, indent=2)
     return updated, fr_raw
+def _extract_json_from_reply(reply: str) -> str:
+    if not reply:
+        return ""
+    s = reply.strip()
+    if s.startswith("```"):
+        s = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", s)
+        s = re.sub(r"\s*```$", "", s).strip()
+    first_obj = s.find("{")
+    first_arr = s.find("[")
+    starts = [i for i in (first_obj, first_arr) if i != -1]
+    if starts:
+        start = min(starts)
+        end_obj = s.rfind("}")
+        end_arr = s.rfind("]")
+        end = max(end_obj, end_arr)
+        if end > start:
+            s = s[start : end + 1].strip()
+    return s
 def _compute_missing_placeholders(template_text: str, draft_json: str) -> List[str]:
     if not template_text or not draft_json:
         return []
@@ -384,11 +404,13 @@ def _open_docx_file(path: str) -> None:
         app.logger.warning("Could not auto-open docx: %s", exc)
 def _order_keys_by_template(keys: list[str], template_text: str) -> list[str]:
     if not template_text:
-        return sorted(keys, key=lambda s: s.lower())
-    def pos(k: str) -> int:
-        i = template_text.find(k)
-        return i if i != -1 else 10**18
-    return sorted(keys, key=lambda k: (pos(k), k.lower()))
+        return list(keys)
+    scored = []
+    for idx, k in enumerate(keys):
+        p = template_text.find(k)
+        scored.append((p if p != -1 else 10**18, idx, k))
+    scored.sort(key=lambda t: (t[0], t[1]))
+    return [k for _, _, k in scored]
 def _add_value_to_doc(doc: Document, value):
     if value is None or value == "":
         doc.add_paragraph("(empty)")
@@ -454,13 +476,21 @@ def _build_docx_bytes_for_view(
         questions = parsed.get("questions") if isinstance(parsed, dict) else []
         if not isinstance(questions, list):
             questions = []
-        key_set = set(placeholders.keys())
+        key_list: list[str] = []
+        seen = set()
+        for k in placeholders.keys():
+            if k not in seen:
+                key_list.append(k)
+                seen.add(k)
         for item in answers_list:
             if isinstance(item, dict):
                 ph = item.get("placeholder") or item.get("token")
-                if isinstance(ph, str) and ph.strip():
-                    key_set.add(ph.strip())
-        ordered = _order_keys_by_template(list(key_set), template_text or "")
+                if isinstance(ph, str):
+                    ph = ph.strip()
+                    if ph and ph not in seen:
+                        key_list.append(ph)
+                        seen.add(ph)
+        ordered = _order_keys_by_template(key_list, template_text or "")
         for ph in ordered:
             val = placeholders.get(ph)
             p = doc.add_paragraph()
@@ -858,18 +888,38 @@ def index():
                                 error = str(exc)
         if action == "chat" and client:
             user_message = request.form.get("chat_input", "").strip()
+            chat_update_json = request.form.get("chat_update_json") == "on"
             if user_message:
                 history.append({"role": "user", "content": user_message})
-                seed = {
-                    "role": "system",
-                    "content": (
-                        "You are assisting with Medtronic validation drafting. Answer user questions directly and succinctly using the provided context. "
-                        "Do not invent person names or signatures. If context is missing, ask one concise follow-up question. Avoid returning JSON unless explicitly requested."
-                    ),
-                }
+                if chat_update_json:
+                    seed = {
+                        "role": "system",
+                        "content": (
+                            "You are assisting with Medtronic validation drafting.\n"
+                            "IMPORTANT: Return VALID JSON ONLY (no markdown, no code fences).\n"
+                            "You MUST output the FULL updated draft JSON in the SAME schema as the current draft:\n"
+                            "{\n"
+                            "  \"placeholders\": { ... },\n"
+                            "  \"answers\": [ ... ],\n"
+                            "  \"questions\": [ ... ],\n"
+                            "  \"coverage\": { ... }\n"
+                            "}\n"
+                            "Start from the provided current draft JSON and apply the user's request.\n"
+                            "If information is missing, add concise items to `questions` rather than guessing.\n"
+                            "Never fabricate person names or signatures.\n"
+                        ),
+                    }
+                else:
+                    seed = {
+                        "role": "system",
+                        "content": (
+                            "You are assisting with Medtronic validation drafting. Answer user questions directly and succinctly using the provided context. "
+                            "Do not invent person names or signatures. If context is missing, ask one concise follow-up question. Avoid returning JSON unless explicitly requested."
+                        ),
+                    }
                 full_history = [seed]
-                if prompt:
-                    full_history.append({"role": "system", "content": f"Reference prompt context to stay on-topic:\n{prompt}"})
+                if prompt and not chat_update_json:
+                  full_history.append({"role": "system", "content": f"Reference prompt context to stay on-topic:\n{prompt}"})
                 if plan_text.strip():
                     full_history.append(
                         {
@@ -892,6 +942,18 @@ def index():
                     with _timed(timings, "chat_completion_ms"):
                         reply = client.generate_completion(model=model, messages=full_history)
                     history.append({"role": "assistant", "content": reply})
+                    if chat_update_json:
+                      try:
+                          cleaned = _extract_json_from_reply(reply) or (reply or "")
+                          parsed = json.loads(cleaned)
+                          if not isinstance(parsed, dict):
+                              raise ValueError("Chat returned JSON but not an object.")
+                          draft = json.dumps(parsed, indent=2)
+                          draft_json_from_form = draft
+                          draft_questions = _extract_questions_from_json(draft)
+                      except Exception as e:
+                          app.logger.warning("Chat JSON parse failed: %s; reply_head=%r", e, (reply or "")[:400])
+                          error = "Chat JSON mode was enabled, but the model response was not valid draft JSON. Try again or disable the toggle."
                 except MedtronicGPTError as exc:
                     error = str(exc)
         elif action == "chat" and not client:
@@ -1593,6 +1655,13 @@ TEMPLATE = """
       <div class="card" style="margin-top: 10px;">
         <div class="tagline"><span class="pill">Clarify or refine</span></div>
         <form method="post" class="chat" id="chatForm">
+          <label class="checkbox" style="margin-top: 10px;">
+            <input type="checkbox" name="chat_update_json" id="chat_update_json">
+            <span>Integrate chat output to draft JSON (structured)</span>
+          </label>
+          <p class="muted" style="margin: 6px 0 0; font-size: 12px;">
+            When enabled, chat returns an updated JSON draft.
+          </p>
           <input type="hidden" name="action" value="chat">
           <input type="hidden" name="use_model" value="on">
           <input type="hidden" name="model" id="chatModel" value="{{ defaults.model }}">
@@ -2149,19 +2218,23 @@ TEMPLATE = """
       return true;
     }
     function orderKeysByTemplate(keys) {
+      const original = keys.slice(); // preserves insertion order from Set/Object.keys
       if (!templateText || typeof templateText !== 'string' || !templateText.length) {
-        return keys.slice().sort(function (a, b) {
-          return a.localeCompare(b, undefined, { sensitivity: 'base' });
-        });
+        return original;
       }
-      return keys.slice().sort(function (a, b) {
-        var ia = templateText.indexOf(a);
-        var ib = templateText.indexOf(b);
-        var aPos = ia === -1 ? Number.MAX_SAFE_INTEGER : ia;
-        var bPos = ib === -1 ? Number.MAX_SAFE_INTEGER : ib;
-        if (aPos !== bPos) return aPos - bPos;
-        return a.localeCompare(b, undefined, { sensitivity: 'base' });
+      const scored = original.map((k, idx) => {
+        const pos = templateText.indexOf(k);
+        return {
+          k,
+          idx, // original order for stable tie-break
+          pos: pos === -1 ? Number.MAX_SAFE_INTEGER : pos,
+        };
       });
+      scored.sort((a, b) => {
+        if (a.pos !== b.pos) return a.pos - b.pos;
+        return a.idx - b.idx;
+      });
+      return scored.map((x) => x.k);
     }
     function renderFriendly() {
       if (!friendlyView) return;
