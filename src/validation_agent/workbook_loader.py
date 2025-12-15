@@ -9,6 +9,7 @@ import json
 import subprocess
 import tempfile
 import os
+import shutil
 import logging
 import sys
 logger = logging.getLogger(__name__)
@@ -23,25 +24,34 @@ def _run_pbitools_extract(pbix_path: Path) -> Path | None:
         exe = "pbi-tools"
     tmp_dir = tempfile.mkdtemp(prefix="pbitools_extract_")
     out_dir = Path(tmp_dir)
+    resolved = shutil.which(exe) or exe
     cmd = [
-        exe,
+        resolved,
         "extract",
         str(pbix_path),
         "-extractFolder", str(out_dir),
         "-modelSerialization", "Legacy",      # ensures Model/DataModelSchema.json
         "-mashupSerialization", "Default",
     ]
+    if os.name == "nt" and str(resolved).lower().endswith((".cmd", ".bat")):
+        cmd = ["cmd.exe", "/c"] + cmd
     logger.info("pbi-tools: starting extract")
     logger.info("pbi-tools: exe=%r tmp_dir=%s", exe, out_dir)
     logger.info("pbi-tools: full command: %s", " ".join(cmd))
+    run_kwargs = dict(
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if os.name == "nt":
+        run_kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = subprocess.SW_HIDE
+        run_kwargs["startupinfo"] = si
     try:
-        result = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
-        )
+        result = subprocess.run(cmd, **run_kwargs)
     except FileNotFoundError:
         logger.error(
             "pbi-tools executable %r not found. "
