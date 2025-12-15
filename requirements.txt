@@ -1,0 +1,9 @@
+Flask>=2.3,<3.0
+python-docx>=0.8.11
+mammoth>=1.5.0
+pypdf>=3.17.0
+openpyxl>=3.1.0
+pyxlsb>=1.0.10
+oletools>=0.60
+pywin32>=306; platform_system == "Windows"
+pyinstaller>=6.0.0
