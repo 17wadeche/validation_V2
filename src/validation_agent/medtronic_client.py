@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from urllib import error, parse, request
 from typing import List
@@ -24,6 +25,8 @@ class MedtronicGPTClient:
     DEFAULT_PATH_TEMPLATE = "/models/{model}"
     DEFAULT_TEMPERATURE = 0.0
     DEFAULT_MAX_COMPLETION_TOKENS = 32768
+    RATE_LIMIT_RETRY_SLEEP_SECONDS: float = 2.0
+    RATE_LIMIT_MAX_RETRIES: int = 1
     @staticmethod
     def _infer_max_completion_tokens_for_model(model: str) -> int | None:
         if not model:
@@ -77,6 +80,32 @@ class MedtronicGPTClient:
                     "Message history is empty; provide at least one message."
                 )
             payload_messages = messages
+        def _send_once_with_429_retry(
+            current_api_token: str,
+            *,
+            include_temperature: bool = True,
+            include_max_completion_tokens: bool = True,
+        ) -> str:
+            attempts = 0
+            while True:
+                try:
+                    return _send_once(
+                        current_api_token,
+                        include_temperature=include_temperature,
+                        include_max_completion_tokens=include_max_completion_tokens,
+                    )
+                except error.HTTPError as exc:
+                    if exc.code == 429 and attempts < self.RATE_LIMIT_MAX_RETRIES:
+                        attempts += 1
+                        logger.warning(
+                            "MedtronicGPT 429 rate limit hit; sleeping %.1fs then retrying (%d/%d)",
+                            self.RATE_LIMIT_RETRY_SLEEP_SECONDS,
+                            attempts,
+                            self.RATE_LIMIT_MAX_RETRIES,
+                        )
+                        time.sleep(self.RATE_LIMIT_RETRY_SLEEP_SECONDS)
+                        continue
+                    raise
         def _compute_max_completion_tokens() -> int | None:
             if max_completion_tokens is not None:
                 return int(max_completion_tokens)
@@ -128,7 +157,7 @@ class MedtronicGPTClient:
             return self._extract_content(body)
         def _send_with_retry(current_api_token: str) -> str:
             try:
-                return _send_once(
+                return _send_once_with_429_retry(
                     current_api_token,
                     include_temperature=True,
                     include_max_completion_tokens=True,
@@ -142,7 +171,7 @@ class MedtronicGPTClient:
                     model,
                 )
                 try:
-                    return _send_once(
+                    return _send_once_with_429_retry(
                         current_api_token,
                         include_temperature=False,
                         include_max_completion_tokens=True,
@@ -156,7 +185,7 @@ class MedtronicGPTClient:
                         model,
                     )
                     try:
-                        return _send_once(
+                        return _send_once_with_429_retry(
                             current_api_token,
                             include_temperature=False,
                             include_max_completion_tokens=False,
@@ -215,18 +244,27 @@ class MedtronicGPTClient:
             "Accept": "application/json",
         }
         req = request.Request(url, data=json.dumps({}).encode("utf-8"), headers=headers)
-        try:
-            with request.urlopen(req) as resp:  # nosec: B310
-                body = resp.read().decode("utf-8")
-        except error.HTTPError as exc:  # pragma: no cover - network
-            detail = self._safe_read_error_body(exc)
-            raise MedtronicGPTError(
-                f"Token refresh failed ({exc.code}): {exc.reason} (URL: {url}){detail}"
-            ) from exc
-        except error.URLError as exc:  # pragma: no cover - network
-            raise MedtronicGPTError(
-                f"MedtronicGPT connection error during refresh: {exc.reason}"
-            ) from exc
+        attempts = 0
+        while True:
+            try:
+                with request.urlopen(req) as resp:  # nosec: B310
+                    body = resp.read().decode("utf-8")
+                break
+            except error.HTTPError as exc:  # pragma: no cover - network
+                if exc.code == 429 and attempts < self.RATE_LIMIT_MAX_RETRIES:
+                    attempts += 1
+                    logger.warning(
+                        "Token refresh hit 429; sleeping %.1fs then retrying (%d/%d)",
+                       self.RATE_LIMIT_RETRY_SLEEP_SECONDS,
+                        attempts,
+                        self.RATE_LIMIT_MAX_RETRIES,
+                    )
+                    time.sleep(self.RATE_LIMIT_RETRY_SLEEP_SECONDS)
+                    continue
+                detail = self._safe_read_error_body(exc)
+                raise MedtronicGPTError(
+                    f"Token refresh failed ({exc.code}): {exc.reason} (URL: {url}){detail}"
+                ) from exc
         try:
             data = json.loads(body)
         except json.JSONDecodeError as exc:  # pragma: no cover - parsing

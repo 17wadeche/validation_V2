@@ -3,7 +3,13 @@ import json
 import tempfile
 from pathlib import Path
 from typing import List, Optional, Tuple
-from flask import Flask, render_template_string, request
+from io import BytesIO
+from datetime import datetime
+import sys
+import subprocess
+from docx import Document
+from docx.shared import Pt
+from flask import Flask, render_template_string, request, send_file
 from src.validation_agent import __version__ as APP_VERSION
 from src.validation_agent.prompt_builder import (
     Example,
@@ -364,6 +370,147 @@ def _build_prompt_from_request(
         template_text or "",
         examples,
         code_context,
+    )
+def _open_docx_file(path: str) -> None:
+    try:
+        if sys.platform.startswith("win"):
+            import os
+            os.startfile(path)  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", path])
+        else:
+            subprocess.Popen(["xdg-open", path])
+    except Exception as exc:
+        app.logger.warning("Could not auto-open docx: %s", exc)
+def _order_keys_by_template(keys: list[str], template_text: str) -> list[str]:
+    if not template_text:
+        return sorted(keys, key=lambda s: s.lower())
+    def pos(k: str) -> int:
+        i = template_text.find(k)
+        return i if i != -1 else 10**18
+    return sorted(keys, key=lambda k: (pos(k), k.lower()))
+def _add_value_to_doc(doc: Document, value):
+    if value is None or value == "":
+        doc.add_paragraph("(empty)")
+        return
+    if isinstance(value, str):
+        doc.add_paragraph(value)
+        return
+    if isinstance(value, list):
+        if not value:
+            doc.add_paragraph("(empty list)")
+            return
+        for item in value:
+            if isinstance(item, dict):
+                p = doc.add_paragraph(style="List Bullet")
+                p.add_run("")  # anchor
+                for k, v in item.items():
+                    sp = doc.add_paragraph(style="List Bullet 2")
+                    sp.add_run(f"{k}: ").bold = True
+                    sp.add_run(str(v))
+            else:
+                doc.add_paragraph(str(item), style="List Bullet")
+        return
+    if isinstance(value, dict):
+        for k, v in value.items():
+            p = doc.add_paragraph(style="List Bullet")
+            p.add_run(f"{k}: ").bold = True
+            p.add_run(str(v))
+        return
+    doc.add_paragraph(str(value))
+def _build_docx_bytes_for_view(
+    *,
+    view: str,
+    draft_json: str,
+    template_text: str = "",
+    markdown_text: str = "",
+) -> bytes:
+    doc = Document()
+    doc.add_heading("Validation Export", level=1)
+    doc.add_paragraph(f"View: {view}")
+    if view == "json":
+        doc.add_heading("JSON", level=2)
+        for line in (draft_json or "").splitlines():
+            p = doc.add_paragraph(line)
+            for run in p.runs:
+                run.font.name = "Courier New"
+                run.font.size = Pt(9)
+    elif view == "markdown":
+        doc.add_heading("Markdown", level=2)
+        for line in (markdown_text or "").splitlines():
+            doc.add_paragraph(line)
+    else:
+        doc.add_heading("Answers", level=2)
+        try:
+            parsed = json.loads(draft_json) if draft_json else {}
+        except Exception:
+            parsed = {}
+        placeholders = parsed.get("placeholders") if isinstance(parsed, dict) else {}
+        if not isinstance(placeholders, dict):
+            placeholders = {}
+        answers_list = parsed.get("answers") if isinstance(parsed, dict) else []
+        if not isinstance(answers_list, list):
+            answers_list = []
+        questions = parsed.get("questions") if isinstance(parsed, dict) else []
+        if not isinstance(questions, list):
+            questions = []
+        key_set = set(placeholders.keys())
+        for item in answers_list:
+            if isinstance(item, dict):
+                ph = item.get("placeholder") or item.get("token")
+                if isinstance(ph, str) and ph.strip():
+                    key_set.add(ph.strip())
+        ordered = _order_keys_by_template(list(key_set), template_text or "")
+        for ph in ordered:
+            val = placeholders.get(ph)
+            p = doc.add_paragraph()
+            p.add_run(ph).bold = True
+            if val is None or val == "":
+                found = None
+                for a in answers_list:
+                    if isinstance(a, dict) and (a.get("placeholder") == ph or a.get("token") == ph):
+                        repl = a.get("replacement", a.get("answer"))
+                        if repl not in (None, ""):
+                            found = repl
+                            break
+                val = found
+            if val is None or val == "":
+                continue  
+            _add_value_to_doc(doc, val)
+            doc.add_paragraph("")  # spacer
+        if questions:
+            doc.add_heading("Remaining questions", level=2)
+            for q in questions:
+                if isinstance(q, str) and q.strip():
+                    doc.add_paragraph(q.strip(), style="List Bullet")
+    bio = BytesIO()
+    doc.save(bio)
+    return bio.getvalue()
+@app.route("/export_docx", methods=["POST"])
+def export_docx():
+    view = (request.form.get("view") or "friendly").strip().lower()
+    draft_json = request.form.get("draft_json", "") or ""
+    template_text = request.form.get("template_text", "") or ""
+    markdown_text = request.form.get("markdown_text", "") or ""
+    docx_bytes = _build_docx_bytes_for_view(
+        view=view,
+        draft_json=draft_json,
+        template_text=template_text,
+        markdown_text=markdown_text,
+    )
+    tmp_path = Path(tempfile.gettempdir()) / f"validation_export_{view}_{uuid.uuid4().hex}.docx"
+    try:
+        tmp_path.write_bytes(docx_bytes)
+        if request.form.get("open_now") == "1":
+            _open_docx_file(str(tmp_path))
+    except Exception as exc:
+        app.logger.warning("Export temp write/open failed: %s", exc)
+    filename = f"validation_export_{view}.docx"
+    return send_file(
+        BytesIO(docx_bytes),
+        mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        as_attachment=True,
+        download_name=filename,
     )
 @app.route("/", methods=["GET", "POST"])
 def index():
@@ -1383,8 +1530,9 @@ TEMPLATE = """
             </div>
             <button type="button" class="btn btn-primary" id="copyAll">Copy all</button>
             <button type="button" class="btn btn-ghost" id="showFrRaw" {% if not fr_raw %}style="display:none;"{% endif %}>
-              FR raw JSON
+              Functional Requirements raw JSON
             </button>
+            <button type="button" class="btn btn-ghost" id="exportWord">Export to Word</button>
           </div>
           <div id="jsonView" class="output" style="margin-top: 10px; white-space: pre-wrap;">{{ draft }}</div>
           <div
@@ -1583,6 +1731,13 @@ TEMPLATE = """
           <button type="button" id="saveUserNameBtn" class="btn btn-primary">Save</button>
         </div>
       </div>
+      <form id="exportForm" method="post" action="/export_docx" target="_blank" style="display:none;">
+        <input type="hidden" name="view" id="exportView" value="friendly" />
+        <input type="hidden" name="open_now" value="1" />
+        <textarea name="draft_json" id="exportDraftJson" style="display:none;"></textarea>
+        <textarea name="template_text" id="exportTemplateText" style="display:none;">{{ template_text }}</textarea>
+        <textarea name="markdown_text" id="exportMarkdownText" style="display:none;"></textarea>
+      </form>
     </div>
     <script>
     const loading = document.getElementById('loading');
@@ -1627,6 +1782,25 @@ TEMPLATE = """
     const feedbackForm = document.getElementById('feedbackForm');
     const easyHidden = document.getElementById('easyViewHidden');
     const mdHidden = document.getElementById('markdownViewHidden');
+    const exportWordBtn = document.getElementById('exportWord');
+    const exportForm = document.getElementById('exportForm');
+    const exportView = document.getElementById('exportView');
+    const exportDraftJson = document.getElementById('exportDraftJson');
+    const exportMarkdownText = document.getElementById('exportMarkdownText');
+    if (exportWordBtn && exportForm) {
+      exportWordBtn.addEventListener('click', () => {
+        const viewToSend = activeView === 'friendly' ? 'friendly' : activeView;
+        exportView.value = viewToSend;
+        const jsonText = (jsonView && jsonView.textContent) ? jsonView.textContent : rawDraftText();
+        exportDraftJson.value = jsonText || '';
+        if (viewToSend === 'markdown') {
+          exportMarkdownText.value = (markdownView && markdownView.textContent) ? markdownView.textContent : '';
+        } else {
+          exportMarkdownText.value = '';
+        }
+        exportForm.submit();
+      });
+    }
     if (feedbackForm) {
       feedbackForm.addEventListener('submit', () => {
         if (friendlyView && easyHidden) {
