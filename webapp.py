@@ -385,9 +385,9 @@ def _build_prompt_from_request(
     files,
     selected_template: Optional[StoredFile],
     kept_saved_examples: List[StoredFile],
-    user_instructions: str | None,
     plan_context: str | None,
     release_type: str,
+    user_instructions: str | None,
 ) -> Tuple[str, Optional[bytes], Optional[StoredFile], List[StoredFile], str, List[Example], str]:
     template_text, template_bytes, _, template_name = _read_upload(files.get("template_file"))
     stored_template: Optional[StoredFile] = None
@@ -559,7 +559,9 @@ def shutdown():
         abort(403)
     func = request.environ.get("werkzeug.server.shutdown")
     if func is None:
-        os._exit(0)
+        resp = ("OK", 200)
+        threading.Thread(target=lambda: os._exit(0), daemon=True).start()
+        return resp
     func()
     return "OK"
 @app.route("/export_docx", methods=["POST"])
@@ -2651,64 +2653,34 @@ TEMPLATE = """
 </body>
 </html>
 """
-def kill_prior_instances_by_keyword() -> None:
-    import os
-    import time
-    keywords = ("validation-ui", "validationlauncher")
-    me_pid = os.getpid()
-    parent_pid = os.getppid()
+_instance_lock = None
+def acquire_single_instance_lock(app_dir: Path) -> object:
+    lock_path = app_dir / "ui.lock"
+    f = open(lock_path, "a+b")
+    f.seek(0)
+    if f.tell() == 0:
+        f.write(b"\0")
+        f.flush()
     try:
-        import psutil  # type: ignore
-    except Exception:
-        psutil = None
-    if psutil:
-        try:
-            me = psutil.Process(me_pid)
-        except Exception:
-            me = None
-        exclude = {me_pid, parent_pid}
-        if me:
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        rt = app_dir / "runtime.json"
+        if rt.exists():
             try:
-                exclude.update(p.pid for p in me.parents())
+                d = json.loads(rt.read_text(encoding="utf-8"))
+                import webbrowser
+                webbrowser.open(f"http://{d.get('host','127.0.0.1')}:{int(d.get('port',8000))}")
             except Exception:
                 pass
-            try:
-                exclude.update(c.pid for c in me.children(recursive=True))
-            except Exception:
-                pass
-        victims = []
-        for p in psutil.process_iter(["pid", "name", "exe", "cmdline"]):
-            try:
-                pid = p.info["pid"]
-                if pid in exclude:
-                    continue
-                name = (p.info.get("name") or "").lower()
-                exe = (p.info.get("exe") or "").lower()
-                cmd = " ".join(p.info.get("cmdline") or []).lower()
-                haystack = f"{name} {exe} {cmd}"
-                if any(k in haystack for k in keywords):
-                    victims.append(p)
-            except Exception:
-                continue
-        for p in victims:
-            try:
-                p.terminate()
-            except Exception:
-                pass
-        try:
-            _, alive = psutil.wait_procs(victims, timeout=2.0)
-        except Exception:
-            alive = victims
-        for p in alive:
-            try:
-                p.kill()
-            except Exception:
-                pass
-        time.sleep(0.2)
-        return
-    return
+        raise SystemExit(0)
+    return f
 if __name__ == "__main__":
-    kill_prior_instances_by_keyword()
+    _instance_lock = acquire_single_instance_lock(_get_app_dir())
     import os
     import socket
     import threading
