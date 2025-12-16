@@ -524,6 +524,67 @@ def _order_keys_by_template(keys: list[str], template_text: str) -> list[str]:
         scored.append((p if p != -1 else 10**18, idx, k))
     scored.sort(key=lambda t: (t[0], t[1]))
     return [k for _, _, k in scored]
+_TEST_LINE_RE = re.compile(r"^\s*(ID|REQ|Description|Outcome|Pass/Fail|Tester Name|Date)\s*:\s*(.*)\s*$")
+def _parse_testing_doc_to_rows(value: Any) -> list[dict]:
+    if isinstance(value, list):
+        # If it is already structured, normalize keys
+        out = []
+        for item in value:
+            if isinstance(item, dict):
+                out.append(item)
+        return out
+    if not isinstance(value, str):
+        return []
+    rows: list[dict] = []
+    cur: dict | None = None
+    for line in value.splitlines():
+        m = _TEST_LINE_RE.match(line)
+        if not m:
+            continue
+        k, v = m.group(1), (m.group(2) or "").strip()
+        if k == "ID":
+            if cur:
+                rows.append(cur)
+            cur = {"ID": v, "REQ": "", "Description": "", "Outcome": "", "Pass/Fail": "", "Tester Name": "", "Date": ""}
+        elif cur is not None:
+            cur[k] = v
+    if cur:
+        rows.append(cur)
+    return rows
+def _add_requirements_table(doc: Document, reqs: list[dict]) -> None:
+    table = doc.add_table(rows=1, cols=3)
+    table.style = "Table Grid"
+    hdr = table.rows[0].cells
+    hdr[0].text = "Unique Req ID"
+    hdr[1].text = "Description"
+    hdr[2].text = "Release Implemented"
+    for r in reqs:
+        row = table.add_row().cells
+        row[0].text = str(r.get("Unique Req ID", ""))
+        row[1].text = str(r.get("Description", ""))
+        row[2].text = str(r.get("Release Implemented", ""))
+def _add_testing_table(doc: Document, rows_data: list[dict]) -> None:
+    table = doc.add_table(rows=1, cols=5)
+    table.style = "Table Grid"
+    hdr = table.rows[0].cells
+    hdr[0].text = "ID"
+    hdr[1].text = "REQ"
+    hdr[2].text = "Description"
+    hdr[3].text = "Outcome"
+    hdr[4].text = "Pass/Fail\nTester Name\nDate"
+    for r in rows_data:
+        row = table.add_row().cells
+        row[0].text = str(r.get("ID", ""))
+        row[1].text = str(r.get("REQ", ""))
+        row[2].text = str(r.get("Description", ""))
+        row[3].text = str(r.get("Outcome", ""))
+        row[4].text = (
+            f"{r.get('Pass/Fail','')}\n"
+            f"{r.get('Tester Name','')}\n"
+            f"{r.get('Date','')}"
+        )
+def _norm_placeholder(ph: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (ph or "").lower())
 def _add_value_to_doc(doc: Document, value):
     if value is None or value == "":
         doc.add_paragraph("(empty)")
@@ -618,7 +679,18 @@ def _build_docx_bytes_for_view(
                             break
                 val = found
             if val is None or val == "":
-                continue  
+                continue
+            n = _norm_placeholder(ph)
+            if isinstance(val, list) and (("functionalrequirements" in n) or n == "requirements" or n.endswith("requirements")):
+                _add_requirements_table(doc, [x for x in val if isinstance(x, dict)])
+                doc.add_paragraph("")
+                continue
+            if n in {"testingdocumentation", "testingdoc", "testdocumentation"}:
+                rows = _parse_testing_doc_to_rows(val)
+                if rows:
+                    _add_testing_table(doc, rows)
+                    doc.add_paragraph("")
+                    continue
             _add_value_to_doc(doc, val)
             doc.add_paragraph("")  # spacer
         if questions:
@@ -1400,6 +1472,9 @@ TEMPLATE = """
       padding-inline: 18px;
       box-shadow: 0 16px 40px rgba(15, 23, 42, 0.35);
     }
+    .data-table { border-collapse: collapse; width: 100%; font-size: 14px; }
+    .data-table th, .data-table td { border: 1px solid #cbd5e1; padding: 8px; vertical-align: top; }
+    .data-table th { background: #e5e7eb; font-weight: 700; }
     .spinner {
       width: 24px;
       height: 24px;
@@ -2391,6 +2466,96 @@ TEMPLATE = """
       });
       return scored.map((x) => x.k);
     }
+    function normKey(s) {
+      return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+    }
+    function parseTestingDocumentation(text) {
+      if (Array.isArray(text)) return text; // if you ever store it structured later
+      if (typeof text !== 'string') return [];
+      const rows = [];
+      let cur = null;
+      const lineRe = /^\s*(ID|REQ|Description|Outcome|Pass\/Fail|Tester Name|Date)\s*:\s*(.*)\s*$/;
+      for (const line of text.split(/\\r?\\n/)) {
+        const m = line.match(lineRe);
+        if (!m) continue;
+        const k = m[1];
+        const v = (m[2] || '').trim();
+        if (k === 'ID') {
+          if (cur) rows.push(cur);
+          cur = { ID: v, REQ: '', Description: '', Outcome: '', 'Pass/Fail': '', 'Tester Name': '', Date: '' };
+          continue;
+        }
+        if (!cur) continue;
+        cur[k] = v;
+      }
+      if (cur) rows.push(cur);
+      return rows;
+    }
+    function renderRequirementsTable(reqs) {
+      if (!Array.isArray(reqs) || !reqs.length) return formatValue(reqs);
+      return `
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th style="width:140px;">Unique Req ID</th>
+              <th>Description</th>
+              <th style="width:170px;">Release Implemented</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${reqs.map(r => `
+              <tr>
+                <td>${escapeHtml(r['Unique Req ID'] ?? '')}</td>
+                <td>${escapeHtml(r['Description'] ?? '')}</td>
+                <td>${escapeHtml(r['Release Implemented'] ?? '')}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+    function renderTestingTable(textOrRows) {
+      const rows = parseTestingDocumentation(textOrRows);
+      if (!rows.length) return formatValue(textOrRows);
+      return `
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th style="width:90px;">ID</th>
+              <th style="width:90px;">REQ</th>
+              <th>Description</th>
+              <th>Outcome</th>
+              <th style="width:180px;">Pass/Fail<br/>Tester Name<br/>Date</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map(r => `
+              <tr>
+                <td>${escapeHtml(r.ID ?? '')}</td>
+                <td>${escapeHtml(r.REQ ?? '')}</td>
+                <td>${escapeHtml(r.Description ?? '')}</td>
+                <td>${escapeHtml(r.Outcome ?? '')}</td>
+                <td>
+                  ${escapeHtml(r['Pass/Fail'] ?? '')}<br/>
+                  ${escapeHtml(r['Tester Name'] ?? '')}<br/>
+                  ${escapeHtml(r.Date ?? '')}
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+    function formatValueForPlaceholder(ph, val) {
+      const n = normKey(ph);
+      if (n.includes('functionalrequirements') || n === 'requirements' || n.endsWith('requirements')) {
+        return renderRequirementsTable(val);
+      }
+      if (n === 'testingdocumentation' || n === 'testingdoc' || n === 'testdocumentation') {
+        return renderTestingTable(val);
+      }
+      return formatValue(val);
+    }
     function renderFriendly() {
       if (!friendlyView) return;
       const parsed = parseDraft();
@@ -2448,7 +2613,7 @@ TEMPLATE = """
         if (!hasNonEmptyValue(primaryValue)) {
           return;
         }
-        const valueHtml = formatValue(primaryValue);
+        const valueHtml = formatValueForPlaceholder(ph, primaryValue);
         const details = [];
         answerItems.forEach((ans) => {
           const q =
