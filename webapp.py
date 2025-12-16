@@ -21,6 +21,7 @@ from src.validation_agent.prompt_builder import (
     extract_placeholders,
     build_design_update_prompt,
     build_functional_requirements_prompt,
+    build_testing_alignment_prompt,
 )
 from src.validation_agent.telemetry import log_event, Timer
 from src.validation_agent.document_loader import load_text_document
@@ -295,6 +296,84 @@ def _apply_functional_requirements_enrichment(
     parsed["placeholders"] = placeholders_map
     updated = json.dumps(parsed, indent=2)
     return updated, fr_raw
+def _apply_testing_documentation_alignment_enrichment(
+    *,
+    draft: str,
+    template_text: str,
+    client: MedtronicGPTClient,
+    model: str,
+) -> tuple[str, Optional[str]]:
+    if not draft:
+        return draft, None
+    try:
+        parsed = json.loads(draft)
+    except Exception:
+        return draft, None
+    if not isinstance(parsed, dict):
+        return draft, None
+    placeholders_map = parsed.get("placeholders")
+    if not isinstance(placeholders_map, dict):
+        placeholders_map = {}
+    answers_list = parsed.get("answers")
+    if not isinstance(answers_list, list):
+        answers_list = []
+    import re
+    def _norm(s: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "", s.lower())
+    fr_value = None
+    for k, v in placeholders_map.items():
+        if "functionalrequirements" in _norm(str(k)) and isinstance(v, list):
+            fr_value = v
+            break
+    if fr_value is None:
+        fr_value = placeholders_map.get("<Functional Requirements>")
+    if not isinstance(fr_value, list) or not fr_value:
+        return draft, None  # nothing to align to
+    test_token = None
+    for k in list(placeholders_map.keys()) + extract_placeholders(template_text or ""):
+        n = _norm(str(k))
+        if n in {"testingdocumentation", "testingdoc", "testdocumentation"}:
+            test_token = str(k)
+            break
+    existing_testing = None
+    if test_token and test_token in placeholders_map:
+        existing_testing = placeholders_map.get(test_token)
+    else:
+        for a in answers_list:
+            if not isinstance(a, dict):
+                continue
+            ph = (a.get("placeholder") or a.get("token") or "").strip()
+            if "testingdocumentation" in _norm(ph):
+                test_token = ph
+                existing_testing = a.get("replacement", a.get("answer"))
+                break
+    if test_token is None or existing_testing is None:
+        return draft, None  # no testing section present
+    align_prompt = build_testing_alignment_prompt(
+        functional_requirements=fr_value,
+        existing_testing_doc=existing_testing,
+    )
+    try:
+        raw = client.generate_completion(align_prompt, model=model)
+    except MedtronicGPTError:
+        return draft, None
+    try:
+        payload = json.loads(_extract_json_from_reply(raw) or raw)
+    except Exception:
+        return draft, raw
+    if not (isinstance(payload, dict) and isinstance(payload.get("testing_documentation_text"), str)):
+        return draft, raw
+    aligned_value = payload["testing_documentation_text"].strip()
+    if test_token in placeholders_map:
+        placeholders_map[test_token] = aligned_value
+    else:
+        for a in answers_list:
+            if isinstance(a, dict) and (a.get("placeholder") == test_token or a.get("token") == test_token):
+                a["replacement"] = aligned_value
+                break
+    parsed["placeholders"] = placeholders_map
+    parsed["answers"] = answers_list
+    return json.dumps(parsed, indent=2), raw
 def _extract_json_from_reply(reply: str) -> str:
     if not reply:
         return ""
@@ -799,9 +878,9 @@ def index():
                 request.files,
                 selected_template_file,
                 kept_saved_examples,
+                user_instructions,
                 plan_text,
                 release_type,
-                user_instructions,
             )
         if stored_template:
             selected_template_name = stored_template.name
@@ -1098,6 +1177,13 @@ def index():
             )
           if fr_raw_latest:
               fr_raw = fr_raw_latest
+          with _timed(timings, "testing_documentation_alignment_ms"):
+              draft, _td_raw_latest = _apply_testing_documentation_alignment_enrichment(
+                  draft=draft,
+                  template_text=template_text,
+                  client=client,
+                  model=model,
+              )
           draft_json_from_form = draft
           draft_questions = _extract_questions_from_json(draft)
     try:

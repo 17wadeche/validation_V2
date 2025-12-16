@@ -2,6 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import re
+import json
 from typing import Iterable, List
 from .document_loader import load_text_document
 @dataclass
@@ -383,6 +384,42 @@ def build_design_update_prompt(
         "- Never fabricate person names, signatures, or regulatory identifiers.\n"
     )
     return "\n\n".join(sections).strip() + "\n"
+def build_testing_alignment_prompt(*, functional_requirements: list[dict], existing_testing_doc) -> str:
+    n = len(functional_requirements or [])
+    return "\n\n".join([
+        "You are updating the Testing Documentation section so it matches the Functional Requirements EXACTLY.",
+        "",
+        "Return ONLY valid JSON in exactly this shape:"
+        "{{"
+        "testing_documentation_text": "<the full aligned Testing Documentation as one markdown/text block>"
+        "}}"
+        "HARD RULES (do not violate):",
+        f"- There are {n} requirements. You MUST generate EXACTLY {n} test cases.",
+        "- Generate tests in the SAME ORDER as the requirements list.",
+        "- One test per requirement (NO grouping).",
+        "- Use IDs FT1..FTN sequentially.",
+        "- Each test must map FTk -> REQ: Fk (e.g., FT1 REQ F1, FT2 REQ F2...).",
+        "- Description MUST test that requirement’s behavior (do not reuse old mismatched descriptions).",
+        "- Outcome MUST be exactly: TBD",
+        "- Pass/Fail MUST be exactly: TBD",
+        "- Tester Name MUST be exactly: (empty)",
+        "- Date MUST be exactly: (empty)",
+        "",
+        "Format inside testing_documentation_text (repeat this block N times):",
+        "ID: FT#",
+        "REQ: F#",
+        "Description: ...",
+        "Outcome: TBD",
+        "Pass/Fail: TBD",
+        "Tester Name: (empty)",
+        "Date: (empty)",
+        "",
+        "Functional Requirements (authoritative):",
+        json.dumps(functional_requirements, indent=2),
+        "",
+        "Existing Testing Documentation (style reference only):",
+        json.dumps(existing_testing_doc, indent=2) if not isinstance(existing_testing_doc, str) else existing_testing_doc,
+    ])
 def build_update_prompt(
     template: str,
     examples: Iterable[Example],

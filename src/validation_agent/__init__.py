@@ -8,6 +8,7 @@ from .prompt_builder import (
     build_update_prompt,
     build_design_update_prompt,
     build_functional_requirements_prompt,
+    build_testing_alignment_prompt,
     format_examples,
     load_examples,
 )
@@ -18,6 +19,7 @@ __all__ = [
     "build_prompt",
     "build_update_prompt",
     "build_design_update_prompt", 
+    "build_testing_alignment_prompt",
     "format_examples",
     "load_code_context",
     "build_functional_requirements_prompt",
@@ -26,4 +28,4 @@ __all__ = [
     "MedtronicGPTClient",
     "MedtronicGPTError",
 ]
-__version__ = "2025.1.7"
+__version__ = "2025.1.8"
