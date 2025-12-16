@@ -527,7 +527,6 @@ def _order_keys_by_template(keys: list[str], template_text: str) -> list[str]:
 _TEST_LINE_RE = re.compile(r"^\s*(ID|REQ|Description|Outcome|Pass/Fail|Tester Name|Date)\s*:\s*(.*)\s*$")
 def _parse_testing_doc_to_rows(value: Any) -> list[dict]:
     if isinstance(value, list):
-        # If it is already structured, normalize keys
         out = []
         for item in value:
             if isinstance(item, dict):
