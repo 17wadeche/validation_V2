@@ -16,6 +16,18 @@ def _safe_mkdir(p: Path) -> None:
         p.mkdir(parents=True, exist_ok=True)
     except Exception:
         pass
+def _user_token(user: str) -> str:
+    u = (user or "").strip()
+    if not u:
+        return "unknown"
+    out = []
+    for ch in u:
+        if ch.isalnum() or ch in ("_", "-", "."):
+            out.append(ch)
+        elif ch.isspace():
+            out.append("_")
+    token = "".join(out).strip("._-")
+    return token or "unknown"
 def _truncate(s: str, limit: int) -> str:
     if not s:
         return ""
@@ -55,7 +67,8 @@ def log_event(
     if cfg.split_by_user:
         stem = Path(base_filename).stem
         suffix = Path(base_filename).suffix or ".jsonl"
-        filename = f"{stem}.{user}{suffix}"  # e.g. telemetry.jdoe.jsonl
+        user_token = _user_token(user)
+        filename = f"{stem}.{user_token}{suffix}"
     record: Dict[str, Any] = {
         "id": str(uuid.uuid4()),
         "ts_utc": _utc_now_iso(),
