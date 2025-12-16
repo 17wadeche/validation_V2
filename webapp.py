@@ -1755,7 +1755,7 @@ TEMPLATE = """
             style="
               margin-top: 10px;
               display: none;
-              white-space: normal;        /* override pre-wrap from .output */
+              white-space: normal;
               max-height: 60vh;
               overflow-y: auto;
             "
@@ -1766,7 +1766,7 @@ TEMPLATE = """
             style="
               margin-top: 10px;
               display: none;
-              white-space: pre-wrap;      /* good for markdown formatting */
+              white-space: pre-wrap;
               max-height: 60vh;
               overflow-y: auto;
               font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
@@ -2373,7 +2373,7 @@ TEMPLATE = """
       return true;
     }
     function orderKeysByTemplate(keys) {
-      const original = keys.slice(); // preserves insertion order from Set/Object.keys
+      const original = keys.slice();
       if (!templateText || typeof templateText !== 'string' || !templateText.length) {
         return original;
       }
@@ -2381,7 +2381,7 @@ TEMPLATE = """
         const pos = templateText.indexOf(k);
         return {
           k,
-          idx, // original order for stable tie-break
+          idx,
           pos: pos === -1 ? Number.MAX_SAFE_INTEGER : pos,
         };
       });
