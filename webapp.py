@@ -361,9 +361,16 @@ def _apply_testing_documentation_alignment_enrichment(
         payload = json.loads(_extract_json_from_reply(raw) or raw)
     except Exception:
         return draft, raw
-    if not (isinstance(payload, dict) and isinstance(payload.get("testing_documentation_text"), str)):
+    aligned_value = None
+    if isinstance(payload, dict):
+        if isinstance(payload.get("testing_documentation"), list):
+            aligned_value = payload["testing_documentation"]
+        elif isinstance(payload.get("testing_documentation_text"), str):
+            aligned_value = payload["testing_documentation_text"].strip()
+    else:
+        aligned_value = payload
+    if aligned_value is None:
         return draft, raw
-    aligned_value = payload["testing_documentation_text"].strip()
     if test_token in placeholders_map:
         placeholders_map[test_token] = aligned_value
     else:
@@ -1178,14 +1185,14 @@ def index():
           if fr_raw_latest:
               fr_raw = fr_raw_latest
           with _timed(timings, "testing_documentation_alignment_ms"):
-              draft, _td_raw_latest = _apply_testing_documentation_alignment_enrichment(
-                  draft=draft,
-                  template_text=template_text,
-                  client=client,
-                  model=model,
-              )
-          draft_json_from_form = draft
-          draft_questions = _extract_questions_from_json(draft)
+            draft, td_raw_latest = _apply_testing_documentation_alignment_enrichment(
+                draft=draft,
+                template_text=template_text,
+                client=client,
+                model=model,
+            )
+          if td_raw_latest:
+              fr_raw = td_raw_latest
     try:
         if request.method == "POST":
             final_action = request.form.get("action", "build")
