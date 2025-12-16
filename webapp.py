@@ -1746,9 +1746,6 @@ TEMPLATE = """
               Markdown view
             </div>
             <button type="button" class="btn btn-primary" id="copyAll">Copy all</button>
-            <button type="button" class="btn btn-ghost" id="showFrRaw" {% if not fr_raw %}style="display:none;"{% endif %}>
-              Testing Documentation raw JSON
-            </button>
             <button type="button" class="btn btn-ghost" id="exportWord">Export to Word</button>
           </div>
           <div id="jsonView" class="output" style="margin-top: 10px; white-space: pre-wrap;">{{ draft }}</div>
