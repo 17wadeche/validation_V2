@@ -2864,27 +2864,48 @@ TEMPLATE = """
       renderMarkdown(); // pre-generate so switching is instant
       setActiveView('friendly');
     }
-    if (copyAll) {
-      copyAll.addEventListener('click', async () => {
-        let toCopy = '';
-        if (activeView === 'json') {
-          toCopy = jsonView ? jsonView.textContent : rawDraftText();
-        } else if (activeView === 'markdown') {
-          toCopy = markdownView ? markdownView.textContent : '';
-        } else if (activeView === 'friendly') {
-          toCopy = friendlyView
-            ? (friendlyView.innerText || friendlyView.textContent || '')
-            : '';
-        } else {
-          toCopy = rawDraftText();
-        }
+    async function copyRich({ text, html }) {
+      if (html && navigator.clipboard && window.ClipboardItem) {
+        const wrappedHtml =
+          `<!doctype html><html><head><meta charset="utf-8">
+            <style>
+              table{border-collapse:collapse;}
+              th,td{border:1px solid #cbd5e1;padding:6px;vertical-align:top;}
+              th{font-weight:600;}
+            </style>
+          </head><body>${html}</body></html>`;
         try {
-          await navigator.clipboard.writeText(toCopy);
-          copyAll.textContent = 'Copied!';
-          setTimeout(() => (copyAll.textContent = 'Copy all'), 1200);
+          await navigator.clipboard.write([
+            new ClipboardItem({
+              "text/plain": new Blob([text || ""], { type: "text/plain" }),
+              "text/html": new Blob([wrappedHtml], { type: "text/html" }),
+            }),
+          ]);
+          return;
         } catch (e) {
-          copyAll.textContent = 'Copy failed';
-          setTimeout(() => (copyAll.textContent = 'Copy all'), 1200);
+        }
+      }
+      await navigator.clipboard.writeText(text || "");
+    }
+    if (copyAll) {
+      copyAll.addEventListener("click", async () => {
+        try {
+          if (activeView === "friendly") {
+            const text = friendlyView ? (friendlyView.innerText || "") : "";
+            const html = friendlyView ? (friendlyView.innerHTML || "") : "";
+            await copyRich({ text, html });
+          } else if (activeView === "json") {
+            await navigator.clipboard.writeText(jsonView ? jsonView.textContent : rawDraftText());
+          } else if (activeView === "markdown") {
+            await navigator.clipboard.writeText(markdownView ? markdownView.textContent : "");
+          } else {
+            await navigator.clipboard.writeText(rawDraftText());
+          }
+          copyAll.textContent = "Copied!";
+          setTimeout(() => (copyAll.textContent = "Copy all"), 1200);
+        } catch (e) {
+          copyAll.textContent = "Copy failed";
+          setTimeout(() => (copyAll.textContent = "Copy all"), 1200);
         }
       });
     }
