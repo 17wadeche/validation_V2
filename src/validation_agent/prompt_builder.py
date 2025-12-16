@@ -228,29 +228,55 @@ def build_functional_requirements_prompt(
     draft_prompt: str,
     code_context: str,
     plan_context: str | None = None,
+    release_type: str = "initial",
 ) -> str:
-    sections: list[str] = [
-        "You are a senior engineer writing clear, testable functional requirements for a software change.",
-        "",
-        "You will be given:",
-        "1) The current validation drafting prompt (captures the template structure, tone, and expectations).",
-        "2) The relevant program code / workbook / PBIX context.",
-        "3) The current planning JSON for this validation (if present).",
-        "",
-        "Your ONLY job in this call is to derive a complete, testable set of functional requirements for THIS tool/version.It much be an exhaustive list.",
-        "",
-        "Functional requirements = what the tool SHALL do (externally observable behaviour):",
-        "- inputs, processing, and outputs;",
-        "- ALL business calculations, formulas, measures, KPIs, and calculated columns that affect what users see or what gets written to outputs;",
-        "- transformations and data flows between tables/queries (joins, filters, groupings, aggregations);",
-        "- error handling and validation of inputs / data / configuration (including messages, blocking vs. warnings);",
-        "- modes, workflows, and options the user can select (e.g., slicers, buttons, macros, toggles);",
-        "- configuration that directly affects behaviour of the tool (e.g., threshold values, flags, feature switches, status mappings);",
-        "- constraints that are directly testable on the tool’s behaviour (e.g., column width limits, freeze panes, mandatory fields).",
-        "",
-        "Do NOT include non-functional requirements (performance, security, usability, documentation, process steps).",
-        "Do NOT repeat or restate quality-system or SOP requirements.",
-    ]
+    if release_type == "initial":
+        sections: list[str] = [
+            "You are a senior engineer writing clear, testable functional requirements for a software change.",
+            "",
+            "You will be given:",
+            "1) The current validation drafting prompt (captures the template structure, tone, and expectations).",
+            "2) The relevant program code / workbook / PBIX context.",
+            "3) The current planning JSON for this validation (if present).",
+            "",
+            "Your ONLY job in this call is to derive a complete, testable set of functional requirements for THIS tool/version.It much be an exhaustive list.",
+            "",
+            "Functional requirements = what the tool SHALL do (externally observable behaviour):",
+            "- inputs, processing, and outputs;",
+            "- ALL business calculations, formulas, measures, KPIs, and calculated columns that affect what users see or what gets written to outputs;",
+            "- transformations and data flows between tables/queries (joins, filters, groupings, aggregations);",
+            "- error handling and validation of inputs / data / configuration (including messages, blocking vs. warnings);",
+            "- modes, workflows, and options the user can select (e.g., slicers, buttons, macros, toggles);",
+            "- configuration that directly affects behaviour of the tool (e.g., threshold values, flags, feature switches, status mappings);",
+            "- constraints that are directly testable on the tool’s behaviour (e.g., column width limits, freeze panes, mandatory fields).",
+            "",
+            "Do NOT include non-functional requirements (performance, security, usability, documentation, process steps).",
+            "Do NOT repeat or restate quality-system or SOP requirements.",
+        ]
+    else:
+        sections: list[str] = [
+            "You are a senior engineer reviewing a software UPDATE/CHANGE and identifying which functional requirements have changed.",
+            "",
+            "You will be given:",
+            "1) The current validation drafting prompt (captures the template structure, tone, and expectations).",
+            "2) The program code / workbook / PBIX context, including:",
+            "   - '## Previous version (for updates)' / '# Previous File:' = OLD implementation",
+            "   - '## Updated version (for updates)' / '# Updated File:' = NEW implementation",
+            "   - '## Current code/context' / '# Current File:' = general/current state",
+            "3) The current planning JSON for this validation (if present).",
+            "",
+            "Your job is to:",
+            "A) Identify which functional requirements have CHANGED between the previous and updated versions.",
+            "B) For CHANGED requirements: generate NEW requirement descriptions that reflect the updated behavior.",
+            "C) For UNCHANGED requirements: copy forward the existing requirement descriptions (if available in prior docs).",
+            "",
+            "Focus on DELTA analysis:",
+            "- What behaviors existed in the OLD version?",
+            "- What behaviors exist in the NEW version?",
+            "- What changed, was added, or was removed?",
+            "",
+            "Mark changed requirements clearly so the test documentation can be updated accordingly.",
+        ]
     sections.append(
         "\n## Current drafting prompt\n"
         "This is the prompt used in the main mapping call. Use it only as background for scope and intent.\n"
@@ -384,36 +410,54 @@ def build_design_update_prompt(
         "- Never fabricate person names, signatures, or regulatory identifiers.\n"
     )
     return "\n\n".join(sections).strip() + "\n"
-def build_testing_alignment_prompt(*, functional_requirements: list[dict], existing_testing_doc) -> str:
+def build_testing_alignment_prompt(
+    *,
+    functional_requirements: list[dict],
+    existing_testing_doc,
+) -> str:
     n = len(functional_requirements or [])
-    return "\n".join([
+    existing_text = (
+        json.dumps(existing_testing_doc, indent=2)
+        if not isinstance(existing_testing_doc, str)
+        else existing_testing_doc
+    )
+    req_ids = [
+        str(r.get("Unique Req ID") or r.get("ID") or r.get("id") or f"F{i+1}")
+        for i, r in enumerate(functional_requirements or [])
+    ]
+    return "\n\n".join([
         "You are updating the Testing Documentation so it matches the Functional Requirements EXACTLY (1 test per requirement).",
         "",
-        "Return ONLY valid JSON in exactly this shape:",
+        "Return ONLY valid JSON (no markdown, no code fences) in EXACTLY this shape:",
         "{",
         '  "testing_documentation": [',
-        '    {"ID":"FT1","REQ":"F1","Description":"...","Outcome":"TBD","Pass/Fail":"TBD","Tester Name":"(empty)","Date":"(empty)"}',
-        "  ]",
+        '    {',
+        '      "ID": "FT1",',
+        f'      "REQ": "{req_ids[0] if req_ids else "F1"}",',
+        '      "Description": "…",',
+        '      "Outcome": "TBD",',
+        '      "Pass/Fail": "TBD",',
+        '      "Tester Name": "(empty)",',
+        '      "Date": "(empty)"',
+        '    }',
+        '  ]',
         "}",
         "",
-        "HARD RULES (do not violate):",
+        "HARD RULES:",
         f"- There are {n} requirements. You MUST generate EXACTLY {n} test cases.",
-        "- Generate tests in the SAME ORDER as the requirements list.",
         "- One test per requirement (NO grouping).",
-        "- Use IDs FT1..FTN sequentially.",
-        "- Each test must map FTk -> REQ: Fk (e.g., FT1 REQ F1, FT2 REQ F2...).",
-        "- Description MUST test the requirement’s behavior (do not reuse old mismatched text).",
-        '- Outcome MUST be exactly: "TBD".',
-        '- Pass/Fail MUST be exactly: "TBD".',
-        '- Tester Name MUST be exactly: "(empty)".',
-        '- Date MUST be exactly: "(empty)".',
+        "- Same order as the requirements list.",
+        "- IDs must be FT1..FTN sequentially.",
+        f"- REQ must match this exact list in order: {json.dumps(req_ids)}",
+        "- Do NOT invent Tester Name or Date; must be '(empty)'.",
+        "- Outcome and Pass/Fail must both be exactly 'TBD'.",
         "",
         "Functional Requirements (authoritative):",
         json.dumps(functional_requirements, indent=2),
         "",
         "Existing Testing Documentation (style reference only):",
-        json.dumps(existing_testing_doc, indent=2) if not isinstance(existing_testing_doc, str) else existing_testing_doc,
-    ])
+        existing_text,
+    ]).strip() + "\n"
 def build_update_prompt(
     template: str,
     examples: Iterable[Example],

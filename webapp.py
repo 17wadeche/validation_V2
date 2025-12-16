@@ -206,6 +206,7 @@ def _apply_functional_requirements_enrichment(
     plan_context: str,
     client: MedtronicGPTClient,
     model: str,
+    release_type: str = "initial",
 ) -> tuple[str, Optional[str]]:
     if not draft or not template_text:
         return draft, None
@@ -243,6 +244,7 @@ def _apply_functional_requirements_enrichment(
         prompt or "",
         code_context,
         plan_context=plan_context,
+        release_type=release_type,
     )
     try:
         fr_raw = client.generate_completion(fr_prompt, model=model)
@@ -320,15 +322,38 @@ def _apply_testing_documentation_alignment_enrichment(
     import re
     def _norm(s: str) -> str:
         return re.sub(r"[^a-z0-9]+", "", s.lower())
+    def _looks_like_requirements_list(v) -> bool:
+        if not isinstance(v, list) or not v:
+            return False
+        if not all(isinstance(x, dict) for x in v):
+            return False
+        keys = set()
+        for x in v:
+            keys |= set(x.keys())
+        return ("Description" in keys) and (("Unique Req ID" in keys) or ("ID" in keys) or ("id" in keys))
     fr_value = None
+    best_score = -1
     for k, v in placeholders_map.items():
-        if "functionalrequirements" in _norm(str(k)) and isinstance(v, list):
+        if not _looks_like_requirements_list(v):
+            continue
+        nk = _norm(str(k))
+        if "requirement" not in nk:
+            continue
+        score = 0
+        if "functionalrequirements" in nk:
+            score += 10
+        if nk == "requirements" or nk.endswith("requirements"):
+            score += 5
+        best_score = max(best_score, score)
+        if score == best_score:
             fr_value = v
-            break
     if fr_value is None:
-        fr_value = placeholders_map.get("<Functional Requirements>")
-    if not isinstance(fr_value, list) or not fr_value:
-        return draft, None  # nothing to align to
+        for v in placeholders_map.values():
+            if _looks_like_requirements_list(v):
+                fr_value = v
+                break
+    if fr_value is None:
+        return draft, "Testing alignment skipped: could not find a requirements list in placeholders_map."
     test_token = None
     for k in list(placeholders_map.keys()) + extract_placeholders(template_text or ""):
         n = _norm(str(k))
@@ -1181,18 +1206,21 @@ def index():
                 plan_context=plan_text,
                 client=client,
                 model=model,
+                release_type=release_type,
             )
           if fr_raw_latest:
-              fr_raw = fr_raw_latest
-          with _timed(timings, "testing_documentation_alignment_ms"):
+            fr_raw = fr_raw_latest
+        with _timed(timings, "testing_documentation_alignment_ms"):
             draft, td_raw_latest = _apply_testing_documentation_alignment_enrichment(
                 draft=draft,
                 template_text=template_text,
                 client=client,
                 model=model,
             )
-          if td_raw_latest:
-              fr_raw = td_raw_latest
+        if td_raw_latest is not None:
+            fr_raw = td_raw_latest
+        draft_json_from_form = draft
+        draft_questions = _extract_questions_from_json(draft)
     try:
         if request.method == "POST":
             final_action = request.form.get("action", "build")
@@ -1719,7 +1747,7 @@ TEMPLATE = """
             </div>
             <button type="button" class="btn btn-primary" id="copyAll">Copy all</button>
             <button type="button" class="btn btn-ghost" id="showFrRaw" {% if not fr_raw %}style="display:none;"{% endif %}>
-              Functional Requirements raw JSON
+              Testing Documentation raw JSON
             </button>
             <button type="button" class="btn btn-ghost" id="exportWord">Export to Word</button>
           </div>
@@ -1774,6 +1802,7 @@ TEMPLATE = """
         </div>
         </div>
       {% endif %}
+    {% if draft %}
     <div class="section" style="margin-bottom: 12px;">
       <div class="section-head">
         <h2>Ask Clarifying Questions and Refine Answers</h2>
@@ -1821,6 +1850,7 @@ TEMPLATE = """
         {% endif %}
       </div>
     </div>
+    {% endif %}
     <div class="section">
       <div class="section-head">
         <h2>Feedback</h2>
@@ -1890,7 +1920,7 @@ TEMPLATE = """
             background: linear-gradient(120deg, rgba(37,99,235,0.08), rgba(15,23,42,0.02));
           "
         >
-          <div style="font-weight: 600; color:#0f172a; font-size:14px;">Functional requirements – raw model response</div>
+          <div style="font-weight: 600; color:#0f172a; font-size:14px;">Testing Documentation – raw model response</div>
           <button
             type="button"
             id="frRawClose"
