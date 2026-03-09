@@ -1596,7 +1596,7 @@ TEMPLATE = """
           <div class="stack">
             <div>
               <label class="muted" style="font-weight:600;">Upload template</label>
-              <input class="input" type="file" name="template_file">
+              <input class="input" type="file" name="template_file" id="templateFileInput">
             </div>
             {% if saved_inputs.templates %}
               <div class="stack" style="gap: 8px;">
@@ -2129,7 +2129,7 @@ TEMPLATE = """
     const initialSections = Array.from(document.querySelectorAll('.initial-only'));
     const releaseRadios = Array.from(document.querySelectorAll('input[name="release_type"]'));
     const rememberInputs = document.querySelector('input[name="remember_inputs"]');
-    const templateInput = document.querySelector('input[name="template_file"]');
+    const templateInput = document.getElementById('templateFileInput');
     const examplesInput = document.querySelector('input[name="examples"]');
     const codeFilesManaged = document.getElementById('codeFilesManaged');
     const templateText = {{ (template_text or "")|tojson }};
@@ -2213,6 +2213,7 @@ TEMPLATE = """
     }
     function submitWithAction(actionValue) {
       if (!mainForm) return;
+      mainForm.querySelectorAll('input[type="hidden"][name="action"]').forEach(el => el.remove());
       const hidden = document.createElement('input');
       hidden.type = 'hidden';
       hidden.name = 'action';
