@@ -810,6 +810,82 @@ def index():
             action = "remove_template"
         if remove_example_name:
             action = "remove_example"
+        if action == "save_template":
+            _, tmpl_bytes, _, tmpl_name = _read_upload(request.files.get("template_file"))
+            if tmpl_bytes and tmpl_name:
+                new_tmpl = StoredFile.from_bytes(tmpl_name, tmpl_bytes)
+                updated_templates = _dedupe_by_name([new_tmpl] + list(stored_inputs.templates))
+                persisted_inputs = SavedInputs(
+                    templates=updated_templates,
+                    examples=stored_inputs.examples,
+                )
+                save_inputs(persisted_inputs)
+                stored_inputs = persisted_inputs
+                selected_template_name = new_tmpl.name
+            else:
+                persisted_inputs = stored_inputs
+            return render_template_string(
+                TEMPLATE,
+                prompt=None,
+                draft=draft_json_from_form or None,
+                error=None,
+                defaults=defaults,
+                history=history,
+                stored=stored,
+                saved_inputs=persisted_inputs,
+                user_instructions=user_instructions,
+                plan_text=plan_text,
+                draft_questions=[],
+                app_version=APP_VERSION,
+                draft_json=draft_json_from_form,
+                code_context=code_context_text,
+                code_context_old=code_context_old_text,
+                code_context_new=code_context_new_text,
+                release_type=release_type,
+                selected_template_name=selected_template_name,
+                missing_placeholders=[],
+                fr_raw=fr_raw,
+            )
+        if action == "save_examples":
+            new_stored: List[StoredFile] = []
+            for fs in request.files.getlist("examples"):
+                _, raw_bytes, _, filename = _read_upload(fs)
+                if raw_bytes and filename:
+                    new_stored.append(StoredFile.from_bytes(filename, raw_bytes))
+            existing = list(stored_inputs.examples)
+            existing_names = {ex.name for ex in existing}
+            for ex in new_stored:
+                if ex.name not in existing_names:
+                    existing.append(ex)
+                    existing_names.add(ex.name)
+            persisted_inputs = SavedInputs(
+                templates=stored_inputs.templates,
+                examples=_dedupe_by_name(existing),
+            )
+            save_inputs(persisted_inputs)
+            stored_inputs = persisted_inputs
+            return render_template_string(
+                TEMPLATE,
+                prompt=None,
+                draft=draft_json_from_form or None,
+                error=None,
+                defaults=defaults,
+                history=history,
+                stored=stored,
+                saved_inputs=persisted_inputs,
+                user_instructions=user_instructions,
+                plan_text=plan_text,
+                draft_questions=[],
+                app_version=APP_VERSION,
+                draft_json=draft_json_from_form,
+                code_context=code_context_text,
+                code_context_old=code_context_old_text,
+                code_context_new=code_context_new_text,
+                release_type=release_type,
+                selected_template_name=selected_template_name,
+                missing_placeholders=[],
+                fr_raw=fr_raw,
+            )
         if action == "remove_template":
             updated_templates = [
                 tmpl for tmpl in stored_inputs.templates if tmpl.name != remove_template_name
