@@ -33,6 +33,10 @@ class MedtronicGPTClient:
             return MedtronicGPTClient.DEFAULT_MAX_COMPLETION_TOKENS
         m = model.lower().strip()
         if (
+            m.startswith("gpt-52")
+        ):
+            return 128000
+        if (
             m.startswith("gpt-5")
             or m.startswith("gpt-4.1")
             or m.startswith("gpt-41")
