@@ -28,4 +28,4 @@ __all__ = [
     "MedtronicGPTClient",
     "MedtronicGPTError",
 ]
-__version__ = "2026.1.17"
+__version__ = "2026.1.18"

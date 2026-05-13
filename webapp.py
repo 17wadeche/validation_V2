@@ -1788,6 +1788,7 @@ TEMPLATE = """
                 <label for="model" class="muted" style="font-weight:600;">Model</label>
                 <select class="input" id="model" name="model">
                   {% set current_model = defaults.model or 'gpt-41' %}
+                  <option value="gpt-54" {% if current_model == 'gpt-54' %}selected{% endif %}>gpt-54</option>
                   <option value="gpt-52" {% if current_model == 'gpt-52' %}selected{% endif %}>gpt-52</option>
                   <option value="gpt-5" {% if current_model == 'gpt-5' %}selected{% endif %}>gpt-5</option>
                   <option value="gpt-5-mini" {% if current_model == 'gpt-5-mini' %}selected{% endif %}>gpt-5-mini</option>
@@ -1797,12 +1798,7 @@ TEMPLATE = """
                   <option value="gpt-41-nano" {% if current_model == 'gpt-41-nano' %}selected{% endif %}>gpt-41-nano</option>
                   <option value="o4-mini" {% if current_model == 'o4-mini' %}selected{% endif %}>o4-mini</option>
                   <option value="o3" {% if current_model == 'o3' %}selected{% endif %}>o3</option>
-                  <option value="o3-mini" {% if current_model == 'o3-mini' %}selected{% endif %}>o3-mini</option>
-                  <option value="gpt-4o-mini" {% if current_model == 'gpt-4o-mini' %}selected{% endif %}>gpt-4o-mini</option>
-                  <option value="gpt-4o" {% if current_model == 'gpt-4o' %}selected{% endif %}>gpt-4o</option>
-                  <option value="anthropic.claude-3-5-sonnet-20241022-v2:0" {% if current_model == 'anthropic.claude-3-5-sonnet-20241022-v2:0' %}selected{% endif %}>anthropic.claude-3-5-sonnet-20241022-v2:0</option>
-                  <option value="claude-sonnet-3-7" {% if current_model == 'claude-sonnet-3-7' %}selected{% endif %}>claude-sonnet-3-7</option>
-                  <option value="claude-sonnet-4" {% if current_model == 'claude-sonnet-4' %}selected{% endif %}>claude-sonnet-4</option>
+                  <option value="claude-opus-47" {% if current_model == 'claude-opus-47' %}selected{% endif %}>claude-opus-47</option>
                   <option value="deepseek-r1" {% if current_model == 'deepseek-r1' %}selected{% endif %}>deepseek-r1</option>
                   <option value="pixtral-large-2502" {% if current_model == 'pixtral-large-2502' %}selected{% endif %}>pixtral-large-2502</option>
                   <option value="llama-maverick-17b-instruct" {% if current_model == 'llama-maverick-17b-instruct' %}selected{% endif %}>llama-maverick-17b-instruct</option>
