@@ -1788,7 +1788,6 @@ TEMPLATE = """
                 <label for="model" class="muted" style="font-weight:600;">Model</label>
                 <select class="input" id="model" name="model">
                   {% set current_model = defaults.model or 'gpt-41' %}
-                  <option value="gpt-54" {% if current_model == 'gpt-54' %}selected{% endif %}>gpt-54</option>
                   <option value="gpt-52" {% if current_model == 'gpt-52' %}selected{% endif %}>gpt-52</option>
                   <option value="gpt-5" {% if current_model == 'gpt-5' %}selected{% endif %}>gpt-5</option>
                   <option value="gpt-5-mini" {% if current_model == 'gpt-5-mini' %}selected{% endif %}>gpt-5-mini</option>
